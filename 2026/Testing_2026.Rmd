@@ -17,6 +17,7 @@ library(tibble)
 library(FNN)
 library(rpart) #For classification and regression trees
 library(rattle) #For creating nice visualizations of trees
+library(MLmetrics)
 
 Logisticmodel <- readRDS("march_madness_model.rds")
 LogisticmodelSOS <- readRDS("march_madness_model_sos.rds")
@@ -128,3 +129,73 @@ predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1727,
 A 51pct chance with current stats.  So this moves the percent chance by about 3pct when the strength of schedule is significant which is good.  
 
 It's worth noting that I initially did this test, and the percentage didn't shift.  I caught a bug where I serialized the model without SOS twice at the end of the training file.  This separate distinct test and distinct file really helped me see what was wrong.  Always worth splitting up the work.  
+
+### Test parameters against the 2025 tournament
+Here we're going to validate some of the parameters and maybe find the best using log loss.  
+```{r}
+train_data <- gamedata %>% filter(Season != 2025)
+train_data <- gamedata %>% filter(!(Season == 2025 & DayNum >= 134))
+
+val_data <- gamedata %>% filter(Season == 2025 & DayNum >= 134)
+```
+
+Next we should loop through and compare the k values and regression pct we want to use in the elo run function to pick more optimized values.
+```{r}
+# Grid search over regress and k
+params <- expand.grid(
+  k = c(20, 24, 28, 32, 36, 40, 44),
+  regress_pct = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+)
+
+results <- data.frame()
+
+for(i in 1:nrow(params)) {
+  # Recalculate Elo with these parameters on training data
+  elo_test <- elo.run(
+    score(train_data$WScore, train_data$LScore) ~ 
+      train_data$WTeamName + train_data$LTeamName
+      + regress(train_data$Season, 1500, params$regress_pct[i]),
+    data = train_data, 
+    k = params$k[i]
+  )
+  
+  # Add Elos back to train data
+  train_data_loop <- train_data %>% 
+    mutate(WTeamElo = elo_test$elos[,7], 
+           LTeamElo = elo_test$elos[,8]) %>%
+    mutate(lower_team_elo = ifelse(lower_team_wins == "YES", WTeamElo, LTeamElo),
+           higher_team_elo = ifelse(lower_team_wins == "YES", LTeamElo, WTeamElo))
+  
+  # Train the model on this iteration's data
+  val_model <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
+                    + lower_team_rebdiff 
+                    + lower_team_3diff 
+                    + lower_team_ftdiff
+                    , family = binomial, data = train_data_loop)
+  
+  val_sos_model <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
+                    + lower_team_rebdiff 
+                    + lower_team_3diff 
+                    + lower_team_ftdiff
+                    + lower_team_sosdiff
+                    , family = binomial, data = train_data_loop)
+  
+  # Generate predictions on val_data
+  val_probs <- predict(val_model, newdata = val_data, type = "response")
+  val_probs_sos <- predict(val_sos_model, newdata = val_data, type = "response")
+  
+  # Calculate log loss
+  ll <- LogLoss(val_probs, val_data$lower_team_wins_num)
+  ll_sos <- LogLoss(val_probs_sos, val_data$lower_team_wins_num)
+  
+  results <- rbind(results, data.frame(
+    k = params$k[i],
+    regress = params$regress_pct[i],
+    log_loss = ll,
+    log_loss_sos = ll_sos
+  ))
+}
+
+results %>% arrange(log_loss)
+```
+

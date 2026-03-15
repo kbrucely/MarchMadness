@@ -147,15 +147,6 @@ gamedata <- gamedata %>% mutate(lower_team_ftdiff = ifelse(lower_team_wins == "Y
 gamedata <- gamedata %>% mutate(lower_team_sosdiff = ifelse(lower_team_wins == "Yes", WTeamSOSDiff, LTeamSOS-WTeamSOS))
 ```
 
-We should also trim everything that we don't think we need here before training.  
-```{r}
-#testdata <- gamedata %>% filter(Season == 2024 & DayNum >= 134)
-
-#gamedata <- gamedata %>% filter(Season != 2025)
-#gamedata <- gamedata %>% filter(!(Season == 2024 & DayNum >= 134))
-```
-
-
 ### Part 4
 Let's train our regression
 ```{r}
