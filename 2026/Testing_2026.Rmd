@@ -1,0 +1,130 @@
+---
+title: "Testing_2026"
+author: "Kevin Ly"
+date: "2026-03-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Front Matter
+```{r}
+library(tidyverse)
+library(elo)
+library(tibble)
+library(FNN)
+library(rpart) #For classification and regression trees
+library(rattle) #For creating nice visualizations of trees
+
+Logisticmodel <- readRDS("march_madness_model.rds")
+LogisticmodelSOS <- readRDS("march_madness_model_sos.rds")
+gamedata <- readRDS("gamedata_2026.rds")
+careerElos <- readRDS("career_elos_2026.rds")
+teams <- readRDS("teams_2026.rds")
+sos <- readRDS("sos_2026.rds")
+
+MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.csv")
+```
+
+### Testing Sanity checks
+- Check that elo rating makes sense
+- Review prediction from the last row in the data, ensure that it makes sense
+- Look at elo rankings currently and compare with the top 10
+- Review teams similar rank but with very different SOS
+
+Let's just check with a quick data frame to see how kansas vs army does looking at this.  We should expect a higher ELO
+```{r}
+kansasData <- gamedata %>% filter(WTeamName == "Kansas")
+ArmyData <- gamedata %>% filter(WTeamName == "Army")
+max(kansasData$WTeamElo)
+max(ArmyData$WTeamElo)
+```
+
+These look pretty good, Kansas has a much higher max ELO than ARMY.
+
+Next work with an example prediction of the very last row from gamedata.  Do it first without SOS.
+```{r}
+predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1306, 
+                                            higher_team_elo = 1618, 
+                                            lower_team_rebdiff = 17,
+                                            lower_team_3diff = 4,
+                                            lower_team_ftdiff = -5), type = "response")
+```
+Then do it with SOS
+
+```{r}
+predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1306, 
+                                            higher_team_elo = 1618, 
+                                            lower_team_rebdiff = 17,
+                                            lower_team_3diff = 4,
+                                            lower_team_ftdiff = -5,
+                                            lower_team_sosdiff = 37), type = "response")
+```
+
+
+This is the probability the lower team wins so we'll have to check the team ID and assign probability based on if this team has a smaller ID than the other.  
+
+Now we want to read in and build all of the predictions of every team vs every other team in the tourney.  This will allow us to predict future round matchups. First we need to get the final elos into a place we can use them
+```{r}
+gamedata2025 <- gamedata %>% filter(Season == 2026)
+
+eloScores2025 <- elo.run(score(gamedata2025$WScore, gamedata2025$LScore) ~ gamedata2025$WTeamName + gamedata2025$LTeamName, data = gamedata2025, k = 28)
+
+finalElos <- as.data.frame(final.elos(eloScores2025))
+finalElos <- rownames_to_column(finalElos, "TeamName")
+names(finalElos)[names(finalElos) == 'final.elos(eloScores2025)'] <- 'elo'
+teamstats <- merge(teams[,c(1,2)], finalElos, by = "TeamName")
+```
+
+Next for every team we want to calculate the average rebounds and average 3s made per game
+```{r}
+# I know I'm just pulling average rebounds for just the wins as a quick metric
+AVGREB <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WOR, WDR), list(avgreb = mean))
+names(AVGREB)[names(AVGREB) == 'WTeamID'] <- 'TeamID'
+teamstats <- merge(teamstats, AVGREB, by = "TeamID")
+teamstats <- teamstats %>% mutate(totavgreb = teamstats$WOR_avgreb+ teamstats$WDR_avgreb)
+
+
+# I know I'm just pulling avg 3's made for just the wins as a quick metric
+AVG3 <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WFGM3), list(avg3m = mean))
+teamstats <- merge(teamstats, AVG3, by.x = "TeamID", by.y = "WTeamID")
+
+# I know I'm just pulling avg 3's made for just the wins as a quick metric
+AVGFT <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WFTM), list(avgftm = mean))
+teamstats <- merge(teamstats, AVGFT, by.x = "TeamID", by.y = "WTeamID")
+
+teamstats <- merge(teamstats, sos, by = "TeamName")
+```
+
+Finally show the rankings for the teams
+```{r}
+teamstats %>% arrange(desc(elo))
+```
+
+Now we should test Saint Mary's against Duke and Miami OH against Virgina just to see how SOS affects outcomes
+
+First, Miami of Ohio against Virginia
+
+```{r}
+predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1727, 
+                                            higher_team_elo = 1716, 
+                                            lower_team_rebdiff = -5,
+                                            lower_team_3diff = -1,
+                                            lower_team_ftdiff = -1), type = "response")
+```
+
+A 54pct probability of beating Virginia.  Now if we add in SOS let's see how they do
+```{r}
+predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1727, 
+                                            higher_team_elo = 1716, 
+                                            lower_team_rebdiff = -5,
+                                            lower_team_3diff = -1,
+                                            lower_team_ftdiff = -1,
+                                            lower_team_sosdiff = -96), type = "response")
+```
+
+A 51pct chance with current stats.  So this moves the percent chance by about 3pct when the strength of schedule is significant which is good.  
+
+It's worth noting that I initially did this test, and the percentage didn't shift.  I caught a bug where I serialized the model without SOS twice at the end of the training file.  This separate distinct test and distinct file really helped me see what was wrong.  Always worth splitting up the work.  
