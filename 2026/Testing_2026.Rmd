@@ -133,8 +133,8 @@ It's worth noting that I initially did this test, and the percentage didn't shif
 ### Test parameters against the 2025 tournament
 Here we're going to validate some of the parameters and maybe find the best using log loss.  
 ```{r}
-train_data <- gamedata %>% filter(Season != 2025)
-train_data <- gamedata %>% filter(!(Season == 2025 & DayNum >= 134))
+train_data <- gamedata %>% 
+  filter(Season < 2025 | (Season == 2025 & DayNum < 134))
 
 val_data <- gamedata %>% filter(Season == 2025 & DayNum >= 134)
 ```
