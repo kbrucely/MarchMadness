@@ -28,7 +28,11 @@ sos <- readRDS("sos_2026.rds")
 MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.csv")
 ```
 
-### Part 5
+### Testing Sanity checks
+- Review prediction from the last row in the data, ensure that it makes sense
+- Look at elo rankings currently and compare with the top 10
+- Review teams similar rank but with very different SOS
+
 Start with an example prediction of the very last row from gamedata.  Do it first without SOS.
 ```{r}
 predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1306, 
@@ -111,3 +115,5 @@ predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1727,
 ```
 
 A 51pct chance with current stats.  So this moves the percent chance by about 3pct when the strength of schedule is significant which is good.  
+
+It's worth noting that I initially did this test, and the percentage didn't shift.  I caught a bug where I serialized the model without SOS twice at the end of the training file.  This separate distinct test and distinct file really helped me see what was wrong.  Always worth splitting up the work.  
