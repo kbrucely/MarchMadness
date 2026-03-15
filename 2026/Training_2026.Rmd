@@ -72,9 +72,18 @@ Next we need to try to calculate the winning and losing teams ELO scores and add
 The regression here is really important, it resets elo scores after each season halfway back to the 1500 starting score.  The k is also fairly important as it takes into account the recency of wins.  Higher k means the model accounts for recent wins more heavily.  Some people choose from 20-30, a lot of people will use 40 to heavily favor recency.  
 
 ```{r}
+# Parameter selection based on holdout validation across 3 tournament years
+# k=20 was optimal in all three years - consistent signal
+# regress varied by tournament type:
+#   2023 (upset heavy): regress = 0.3 optimal
+#   2024 (mixed):       regress = 0.7 optimal  
+#   2025 (chalk):       regress = 1.0 optimal
+# Average optimal regress ~ 0.67, settled on 0.6 as principled middle ground
+# All years showed log loss > 0.5 reflecting inherent tournament unpredictability
+# Note: SOS feature showed marginal improvement on 2025, less so on 2024
 eloScores <- elo.run(score(gamedata$WScore, gamedata$LScore) ~ gamedata$WTeamName + gamedata$LTeamName 
-                     + regress(gamedata$Season,1500,0.5)
-                     , data = gamedata, k = 28)
+                     + regress(gamedata$Season,1500,0.6)
+                     , data = gamedata, k = 20)
 
 careerElos <- as.data.frame(final.elos(eloScores))
 careerElos <- rownames_to_column(careerElos, "TeamName")
@@ -146,15 +155,6 @@ gamedata <- gamedata %>% mutate(lower_team_3diff = ifelse(lower_team_wins == "Ye
 gamedata <- gamedata %>% mutate(lower_team_ftdiff = ifelse(lower_team_wins == "Yes", WFTDIFF, LFTM-WFTM))
 gamedata <- gamedata %>% mutate(lower_team_sosdiff = ifelse(lower_team_wins == "Yes", WTeamSOSDiff, LTeamSOS-WTeamSOS))
 ```
-
-We should also trim everything that we don't think we need here before training.  
-```{r}
-#testdata <- gamedata %>% filter(Season == 2024 & DayNum >= 134)
-
-#gamedata <- gamedata %>% filter(Season != 2025)
-#gamedata <- gamedata %>% filter(!(Season == 2024 & DayNum >= 134))
-```
-
 
 ### Part 4
 Let's train our regression
