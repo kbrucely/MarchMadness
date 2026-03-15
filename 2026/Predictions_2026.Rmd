@@ -28,24 +28,7 @@ MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.c
 ```
 
 
-### Part 5
-Start with an example prediction of the very last row from gamedata
-```{r}
-predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1406, 
-                                            higher_team_elo = 1496, 
-                                            lower_team_rebdiff = -13,
-                                            lower_team_3diff = 6,
-                                            lower_team_ftdiff = -4,
-                                            lower_team_sosdiff = 5), type = "response")
-predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1828, 
-                                            higher_team_elo = 1659, 
-                                            lower_team_rebdiff = 11,
-                                            lower_team_3diff = 2,
-                                            lower_team_ftdiff = -3,
-                                            lower_team_sosdiff = 6), type = "response")
-```
-This is the probability the lower team wins so we'll have to check the team ID and assign probability based on if this team has a smaller ID than the other.  
-
+### Building prediction data
 Now we want to read in and build all of the predictions of every team vs every other team in the tourney.  This will allow us to predict future round matchups. First we need to get the final elos into a place we can use them
 ```{r}
 gamedata2025 <- gamedata %>% filter(Season == 2026)
@@ -78,7 +61,7 @@ teamstats <- merge(teamstats, AVGFT, by.x = "TeamID", by.y = "WTeamID")
 teamstats <- merge(teamstats, sos, by = "TeamName")
 ```
 
-### Part 6
+### More prediction data
 Here we will take advantage of R and do two things.  First we'll merge against a smaller list of teams that will be in the tournament.  Then we'll do a cross join of every team vs every other team in the tournament.  That will give us two elo's and two rebounding differentials to use.  
 
 Filter the team stats by the teams actually in the tourney (This needs updated after selection sunday each year)
@@ -102,6 +85,7 @@ predictionData <- predictionData %>%
                                      sos.y - sos.x))
 ```
 
+### Run the actual predictions
 Finally we should run a prediction of our data against our Logistic model
 ```{r}
 tourneyPredictions <- predict(Logisticmodel, predictionData, type = "response")
@@ -135,9 +119,4 @@ kagglepredictions <- kagglepredictions %>% filter(!(TeamID.x > TeamID.y))
 submissiondata <- data.frame(ID = paste("2025",kagglepredictions$TeamID.x,kagglepredictions$TeamID.y, sep="_"), pred = kagglepredictions$probLowerTeamWins)
 
 write.csv(submissiondata,"~/Documents/MarchMadness/2026/submission.csv", row.names = FALSE)
-```
-
-also view the best teams at the end
-```{r}
-teamstats %>% arrange(desc(elo))
 ```

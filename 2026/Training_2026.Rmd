@@ -25,13 +25,11 @@ tourney_scores <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneyDetailedRe
 MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.csv")
 ```
 
-The basic strategy is going to be 
+The basic training strategy is going to be 
 1. Data preparation, binding teams, box scores, and tourney scores into one data frame
-2. Include the winning and losing team's ELO scores in our main data set
+2. Include the winning and losing team's ELO scores in our main data set.  Also use Elo to estimate the teams strength of schedule to see how that factors into wins
 3. Build an average of the team's recent performance using the box scores
 4. Run a logistic regression with the data from 2 and 3
-5. get a table with the teams, elo scores, and recent performance data
-6. Write a loop that will do a prediction for each team in the tournament against every other team in the tournament using the data from part 5.
 
 ## Data preparation
 
@@ -95,16 +93,6 @@ gamedata <- gamedata %>% mutate(lower_team_elo = ifelse(lower_team_wins == "YES"
 gamedata <- gamedata %>% mutate(higher_team_elo = ifelse(lower_team_wins == "YES", LTeamElo, WTeamElo))
 ```
 
-
-Let's just check with a quick data frame to see how kansas vs army does looking at this.  We should expect a higher ELO
-```{r}
-kansasData <- gamedata %>% filter(WTeamName == "Kansas")
-ArmyData <- gamedata %>% filter(WTeamName == "Army")
-max(kansasData$WTeamElo)
-max(ArmyData$WTeamElo)
-```
-
-These look pretty good, Kansas has a much higher max ELO than ARMY.  
 
 Let's also add a new strength of schedule feature to the model.This feature is going to take into account the average elo of the teams opponents, this will give us some measure of if someone is from a conference with really low ranked teams.
 ```{r}

@@ -29,11 +29,22 @@ MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.c
 ```
 
 ### Testing Sanity checks
+- Check that elo rating makes sense
 - Review prediction from the last row in the data, ensure that it makes sense
 - Look at elo rankings currently and compare with the top 10
 - Review teams similar rank but with very different SOS
 
-Start with an example prediction of the very last row from gamedata.  Do it first without SOS.
+Let's just check with a quick data frame to see how kansas vs army does looking at this.  We should expect a higher ELO
+```{r}
+kansasData <- gamedata %>% filter(WTeamName == "Kansas")
+ArmyData <- gamedata %>% filter(WTeamName == "Army")
+max(kansasData$WTeamElo)
+max(ArmyData$WTeamElo)
+```
+
+These look pretty good, Kansas has a much higher max ELO than ARMY.
+
+Next work with an example prediction of the very last row from gamedata.  Do it first without SOS.
 ```{r}
 predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1306, 
                                             higher_team_elo = 1618, 
