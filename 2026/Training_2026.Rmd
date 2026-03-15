@@ -71,7 +71,7 @@ gamedata <- gamedata[with(gamedata, order(Season, DayNum)),]
 ### Part 2
 Next we need to try to calculate the winning and losing teams ELO scores and add them to the game data.  We're going to use the elo.run function from the elos package to calculate this
 
-The regression here is really important, it resets elo scores after each season halfway back to the 1500 starting score
+The regression here is really important, it resets elo scores after each season halfway back to the 1500 starting score.  The k is also fairly important as it takes into account the recency of wins.  Higher k means the model accounts for recent wins more heavily.  Some people choose from 20-30, a lot of people will use 40 to heavily favor recency.  
 
 ```{r}
 eloScores <- elo.run(score(gamedata$WScore, gamedata$LScore) ~ gamedata$WTeamName + gamedata$LTeamName 
@@ -96,7 +96,7 @@ gamedata <- gamedata %>% mutate(higher_team_elo = ifelse(lower_team_wins == "YES
 ```
 
 
-Let's just check with a quick data frame to see how kansas does looking at this.  We should expect a higher ELO
+Let's just check with a quick data frame to see how kansas vs army does looking at this.  We should expect a higher ELO
 ```{r}
 kansasData <- gamedata %>% filter(WTeamName == "Kansas")
 ArmyData <- gamedata %>% filter(WTeamName == "Army")
@@ -106,7 +106,7 @@ max(ArmyData$WTeamElo)
 
 These look pretty good, Kansas has a much higher max ELO than ARMY.  
 
-Let's also add a new strength of schedule feature to the model.
+Let's also add a new strength of schedule feature to the model.This feature is going to take into account the average elo of the teams opponents, this will give us some measure of if someone is from a conference with really low ranked teams.
 ```{r}
 # Strength of schedule: average Elo of all opponents faced in 2026 season
 elo_lookup <- setNames(careerElos$elo, careerElos$TeamName)
@@ -180,13 +180,27 @@ Logisticmodel <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
                       + lower_team_rebdiff 
                      + lower_team_3diff 
                      + lower_team_ftdiff
-                     + lower_team_sosdiff
                        , family = binomial, data = gamedata)
 summary(Logisticmodel)
 ```
 
+Let's also train the model with SOS to compare
+```{r}
+# I tried adding all of the WFGPCT, WFTPCT, W3PTPCT and so on and none of them were significant
+#.  Only rebounding and the 3 point differential was significant because rebounding is KING!
+LogisticmodelSOS <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
+                      + lower_team_rebdiff 
+                     + lower_team_3diff 
+                     + lower_team_ftdiff
+                     + lower_team_sosdiff
+                       , family = binomial, data = gamedata)
+summary(LogisticmodelSOS)
+```
+
+
 ```{r}
 saveRDS(Logisticmodel, "march_madness_model.rds")
+saveRDS(LogisticmodelSOS, "march_madness_model_sos.rds")
 saveRDS(gamedata, "gamedata_2026.rds")        # needed for sos and gamedata2025
 saveRDS(careerElos, "career_elos_2026.rds")   # needed for elo_lookup in SOS calc
 saveRDS(teams, "teams_2026.rds") 

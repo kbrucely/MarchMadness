@@ -18,7 +18,7 @@ library(FNN)
 library(rpart) #For classification and regression trees
 library(rattle) #For creating nice visualizations of trees
 
-Logisticmodel <- readRDS("march_madness_model.rds")
+Logisticmodel <- readRDS("march_madness_model_sos.rds")
 gamedata <- readRDS("gamedata_2026.rds")
 careerElos <- readRDS("career_elos_2026.rds")
 teams <- readRDS("teams_2026.rds")
