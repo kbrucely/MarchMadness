@@ -1,0 +1,143 @@
+---
+title: "march_madness_2026_predictions"
+author: "Kevin Ly"
+date: "2026-03-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Front Matter
+```{r}
+library(tidyverse)
+library(elo)
+library(tibble)
+library(FNN)
+library(rpart) #For classification and regression trees
+library(rattle) #For creating nice visualizations of trees
+
+Logisticmodel <- readRDS("march_madness_model.rds")
+gamedata <- readRDS("gamedata_2026.rds")
+careerElos <- readRDS("career_elos_2026.rds")
+teams <- readRDS("teams_2026.rds")
+sos <- readRDS("sos_2026.rds")
+
+MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.csv")
+```
+
+
+### Part 5
+Start with an example prediction of the very last row from gamedata
+```{r}
+predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1406, 
+                                            higher_team_elo = 1496, 
+                                            lower_team_rebdiff = -13,
+                                            lower_team_3diff = 6,
+                                            lower_team_ftdiff = -4,
+                                            lower_team_sosdiff = 5), type = "response")
+predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1828, 
+                                            higher_team_elo = 1659, 
+                                            lower_team_rebdiff = 11,
+                                            lower_team_3diff = 2,
+                                            lower_team_ftdiff = -3,
+                                            lower_team_sosdiff = 6), type = "response")
+```
+This is the probability the lower team wins so we'll have to check the team ID and assign probability based on if this team has a smaller ID than the other.  
+
+Now we want to read in and build all of the predictions of every team vs every other team in the tourney.  This will allow us to predict future round matchups. First we need to get the final elos into a place we can use them
+```{r}
+gamedata2025 <- gamedata %>% filter(Season == 2026)
+
+eloScores2025 <- elo.run(score(gamedata2025$WScore, gamedata2025$LScore) ~ gamedata2025$WTeamName + gamedata2025$LTeamName, data = gamedata2025, k = 28)
+
+finalElos <- as.data.frame(final.elos(eloScores2025))
+finalElos <- rownames_to_column(finalElos, "TeamName")
+names(finalElos)[names(finalElos) == 'final.elos(eloScores2025)'] <- 'elo'
+teamstats <- merge(teams[,c(1,2)], finalElos, by = "TeamName")
+```
+
+Next for every team we want to calculate the average rebounds and average 3s made per game
+```{r}
+# I know I'm just pulling average rebounds for just the wins as a quick metric
+AVGREB <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WOR, WDR), list(avgreb = mean))
+names(AVGREB)[names(AVGREB) == 'WTeamID'] <- 'TeamID'
+teamstats <- merge(teamstats, AVGREB, by = "TeamID")
+teamstats <- teamstats %>% mutate(totavgreb = teamstats$WOR_avgreb+ teamstats$WDR_avgreb)
+
+
+# I know I'm just pulling avg 3's made for just the wins as a quick metric
+AVG3 <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WFGM3), list(avg3m = mean))
+teamstats <- merge(teamstats, AVG3, by.x = "TeamID", by.y = "WTeamID")
+
+# I know I'm just pulling avg 3's made for just the wins as a quick metric
+AVGFT <- gamedata2025 %>% group_by(WTeamID) %>% summarise_at(vars(WFTM), list(avgftm = mean))
+teamstats <- merge(teamstats, AVGFT, by.x = "TeamID", by.y = "WTeamID")
+
+teamstats <- merge(teamstats, sos, by = "TeamName")
+```
+
+### Part 6
+Here we will take advantage of R and do two things.  First we'll merge against a smaller list of teams that will be in the tournament.  Then we'll do a cross join of every team vs every other team in the tournament.  That will give us two elo's and two rebounding differentials to use.  
+
+Filter the team stats by the teams actually in the tourney (This needs updated after selection sunday each year)
+```{r}
+MNCAATourneySeeds <- MNCAATourneySeeds %>% filter(Season == 2025)
+teamstats <- merge(teamstats, MNCAATourneySeeds, by = "TeamID")
+teamstats <- teamstats[,c(1,2,3,6,7,8,9)]
+```
+
+Next we want to do a cross join of everyone so we can get a matchup of every team vs every other etam.
+```{r}
+predictionData <- cross_join(teamstats, teamstats)
+predictionData <- predictionData %>% mutate(lower_team_elo = ifelse(TeamID.x <= TeamID.y, elo.x, elo.y))
+predictionData <- predictionData %>% mutate(higher_team_elo = ifelse(TeamID.x <= TeamID.y, elo.y, elo.x))
+predictionData <- predictionData %>% mutate(lower_team_rebdiff = ifelse(predictionData$TeamID.x <= TeamID.y, totavgreb.x - totavgreb.y, totavgreb.y - totavgreb.x))
+predictionData <- predictionData %>% mutate(lower_team_3diff = ifelse(TeamID.x <= TeamID.y, avg3m.x - avg3m.y, avg3m.y - avg3m.x))
+predictionData <- predictionData %>% mutate(lower_team_ftdiff = ifelse(TeamID.x <= TeamID.y, avgftm.x - avgftm.y, avgftm.y - avgftm.x))
+predictionData <- predictionData %>% 
+  mutate(lower_team_sosdiff = ifelse(TeamID.x <= TeamID.y, 
+                                     sos.x - sos.y, 
+                                     sos.y - sos.x))
+```
+
+Finally we should run a prediction of our data against our Logistic model
+```{r}
+tourneyPredictions <- predict(Logisticmodel, predictionData, type = "response")
+predictionData <- predictionData %>% mutate(probLowerTeamWins = tourneyPredictions) 
+```
+
+
+### Bonus: class tree
+```{r}
+classTree <- rpart(lower_team_wins_num ~ lower_team_elo 
+                      + higher_team_elo
+                      + lower_team_rebdiff 
+                     + lower_team_3diff
+                   + lower_team_ftdiff, data = gamedata, method = "class")
+```
+
+Now we can make predictions with basically the same function
+```{r}
+classTreePredProb <- predict(classTree, newdata = predictionData, type = "prob")
+```
+
+And append the values to the prediction data so we can read and compare.
+```{r}
+predictionData <- predictionData %>% mutate(probLowTeamWinsClass = classTreePredProb)
+```
+
+## Write the output for kaggle
+```{r}
+kagglepredictions <- predictionData %>% filter(!(TeamID.x == TeamID.y))
+kagglepredictions <- kagglepredictions %>% filter(!(TeamID.x > TeamID.y))
+submissiondata <- data.frame(ID = paste("2025",kagglepredictions$TeamID.x,kagglepredictions$TeamID.y, sep="_"), pred = kagglepredictions$probLowerTeamWins)
+
+write.csv(submissiondata,"~/Documents/MarchMadness/2026/submission.csv", row.names = FALSE)
+```
+
+also view the best teams at the end
+```{r}
+teamstats %>% arrange(desc(elo))
+```

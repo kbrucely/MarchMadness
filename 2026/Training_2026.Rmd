@@ -1,0 +1,195 @@
+---
+title: "March Madness 2026"
+author: "Kevin Ly"
+date: "2026-03-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Front Matter
+```{r}
+library(tidyverse)
+library(elo)
+library(tibble)
+library(FNN)
+library(rpart) #For classification and regression trees
+library(rattle) #For creating nice visualizations of trees
+
+teams <- read.csv("~/Documents/MarchMadness/2026/MTeams.csv")
+box_scores <- read.csv("~/Documents/MarchMadness/2026/MRegularSeasonDetailedResults.csv")
+conf_tourney_scores <- read.csv("~/Documents/MarchMadness/2026/MConferenceTourneyGames.csv")
+tourney_scores <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneyDetailedResults.csv")
+MNCAATourneySeeds <- read.csv("~/Documents/MarchMadness/2026/MNCAATourneySeeds.csv")
+```
+
+The basic strategy is going to be 
+1. Data preparation, binding teams, box scores, and tourney scores into one data frame
+2. Include the winning and losing team's ELO scores in our main data set
+3. Build an average of the team's recent performance using the box scores
+4. Run a logistic regression with the data from 2 and 3
+5. get a table with the teams, elo scores, and recent performance data
+6. Write a loop that will do a prediction for each team in the tournament against every other team in the tournament using the data from part 5.
+
+## Data preparation
+
+### Part 1
+First we should append the tourney and regular season box scores together
+```{r}
+gamedata <- rbind(box_scores,tourney_scores)
+```
+
+Next I want to add columns that give us winning and losing team names.  Do the winning teams first
+```{r}
+gamedata <- merge(teams[,c(1,2)], gamedata, by.x = "TeamID", by.y = "WTeamID", all.y = TRUE)
+gamedata <- gamedata %>% rename(WTeamID = TeamID,
+                WTeamName = TeamName)
+```
+
+Next do the losing teams
+```{r}
+gamedata <- merge(teams[,c(1,2)], gamedata, by.x = "TeamID", by.y = "LTeamID", all.y = TRUE)
+gamedata <- gamedata %>% rename(LTeamID = TeamID,
+                LTeamName = TeamName)
+```
+
+
+We need to turn the game wins from a winning team ID/ losing team ID to a response that we can actually train the regression on
+```{r}
+gamedata <- gamedata %>% mutate(lower_team = pmin(WTeamID, LTeamID), # lower refers to ID number
+           higher_team = pmax(WTeamID, LTeamID),
+           lower_team_wins = ifelse(lower_team == WTeamID, "YES", "NO"))
+```
+
+Let's order by season and day number
+```{r}
+gamedata <- gamedata[with(gamedata, order(Season, DayNum)),]
+```
+
+### Part 2
+Next we need to try to calculate the winning and losing teams ELO scores and add them to the game data.  We're going to use the elo.run function from the elos package to calculate this
+
+The regression here is really important, it resets elo scores after each season halfway back to the 1500 starting score
+
+```{r}
+eloScores <- elo.run(score(gamedata$WScore, gamedata$LScore) ~ gamedata$WTeamName + gamedata$LTeamName 
+                     + regress(gamedata$Season,1500,0.5)
+                     , data = gamedata, k = 28)
+
+careerElos <- as.data.frame(final.elos(eloScores))
+careerElos <- rownames_to_column(careerElos, "TeamName")
+names(careerElos)[2] <- "elo_career"
+```
+
+Now we're going to add the elos into the gamedata so we can use it in our regression training
+```{r}
+gamedata <- gamedata %>% mutate(WTeamElo = eloScores$elos[,7], LTeamElo = eloScores$elos[,8])
+```
+
+We also want to flag the lower_teams_elo so we can train on it.
+
+```{r}
+gamedata <- gamedata %>% mutate(lower_team_elo = ifelse(lower_team_wins == "YES", WTeamElo, LTeamElo))
+gamedata <- gamedata %>% mutate(higher_team_elo = ifelse(lower_team_wins == "YES", LTeamElo, WTeamElo))
+```
+
+
+Let's just check with a quick data frame to see how kansas does looking at this.  We should expect a higher ELO
+```{r}
+kansasData <- gamedata %>% filter(WTeamName == "Kansas")
+ArmyData <- gamedata %>% filter(WTeamName == "Army")
+max(kansasData$WTeamElo)
+max(ArmyData$WTeamElo)
+```
+
+These look pretty good, Kansas has a much higher max ELO than ARMY.  
+
+Let's also add a new strength of schedule feature to the model.
+```{r}
+# Strength of schedule: average Elo of all opponents faced in 2026 season
+elo_lookup <- setNames(careerElos$elo, careerElos$TeamName)
+
+sos_wins <- gamedata %>%
+  group_by(WTeamName) %>%
+  summarise(sos = mean(elo_lookup[LTeamName], na.rm = TRUE), .groups = "drop") %>%
+  rename(TeamName = WTeamName)
+
+sos_losses <- gamedata %>%
+  group_by(LTeamName) %>%
+  summarise(sos = mean(elo_lookup[WTeamName], na.rm = TRUE), .groups = "drop") %>%
+  rename(TeamName = LTeamName)
+
+sos <- bind_rows(sos_wins, sos_losses) %>%
+  group_by(TeamName) %>%
+  summarise(sos = mean(sos, na.rm = TRUE), .groups = "drop")
+
+# Then join back to gamedata on WTeamName and LTeamName separately
+gamedata <- gamedata %>%
+  left_join(sos, by = c("WTeamName" = "TeamName")) %>%
+  rename(WTeamSOS = sos) %>%
+  left_join(sos, by = c("LTeamName" = "TeamName")) %>%
+  rename(LTeamSOS = sos)
+
+# Then flag lower/higher just like you do with Elo
+gamedata <- gamedata %>%
+  mutate(lower_team_sos = ifelse(lower_team_wins == "YES", WTeamSOS, LTeamSOS),
+         higher_team_sos = ifelse(lower_team_wins == "YES", LTeamSOS, WTeamSOS))
+```
+
+
+### Part 3
+Here we're going to just add a few extra metrics that we know matter. We'll calculate based on fg pct, 3pt percentage, rebounding differential, and turnover differential.  
+```{r}
+gamedata <- gamedata %>% mutate(WFGPCT = WFGM/WFGA)
+gamedata <- gamedata %>% mutate(W3PTPCT = WFGM3/WFGA3)
+gamedata <- gamedata %>% mutate(WFTPCT = WFTM/WFTA )
+gamedata <- gamedata %>% mutate(WREBDIFF = (WOR+WDR-LOR-LDR))
+gamedata <- gamedata %>% mutate(WTODIFF = (WTO-LTO))
+gamedata <- gamedata %>% mutate(W3DIFF = (WFGM3-LFGM3))
+gamedata <- gamedata %>% mutate(WFTDIFF = (WFTM-LFTM))
+gamedata <- gamedata %>% mutate(WteamSOSDiff = (WTeamSOS-LTeamSOS))
+
+#Again flag the lower teams rebound differential
+gamedata <- gamedata %>% mutate(lower_team_rebdiff = ifelse(lower_team_wins == "Yes", WREBDIFF, LDR+LOR-WOR-WDR))
+gamedata <- gamedata %>% mutate(lower_team_todiff = ifelse(lower_team_wins == "Yes", WTODIFF, LTO-WTO))
+gamedata <- gamedata %>% mutate(lower_team_3diff = ifelse(lower_team_wins == "Yes", W3DIFF, LFGM3-WFGM3))
+gamedata <- gamedata %>% mutate(lower_team_ftdiff = ifelse(lower_team_wins == "Yes", WFTDIFF, LFTM-WFTM))
+gamedata <- gamedata %>% mutate(lower_team_sosdiff = ifelse(lower_team_wins == "Yes", WTeamSOSDiff, LTeamSOS-WTeamSOS))
+```
+
+We should also trim everything that we don't think we need here before training.  
+```{r}
+#testdata <- gamedata %>% filter(Season == 2024 & DayNum >= 134)
+
+#gamedata <- gamedata %>% filter(Season != 2025)
+#gamedata <- gamedata %>% filter(!(Season == 2024 & DayNum >= 134))
+```
+
+
+### Part 4
+Let's train our regression
+```{r}
+levels(as.factor(gamedata$lower_team_wins))
+gamedata <- gamedata %>% mutate(lower_team_wins_num = ifelse(lower_team_wins == "YES", 1, 0))
+
+# I tried adding all of the WFGPCT, WFTPCT, W3PTPCT and so on and none of them were significant
+#.  Only rebounding and the 3 point differential was significant because rebounding is KING!
+Logisticmodel <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
+                      + lower_team_rebdiff 
+                     + lower_team_3diff 
+                     + lower_team_ftdiff
+                     + lower_team_sosdiff
+                       , family = binomial, data = gamedata)
+summary(Logisticmodel)
+```
+
+```{r}
+saveRDS(Logisticmodel, "march_madness_model.rds")
+saveRDS(gamedata, "gamedata_2026.rds")        # needed for sos and gamedata2025
+saveRDS(careerElos, "career_elos_2026.rds")   # needed for elo_lookup in SOS calc
+saveRDS(teams, "teams_2026.rds") 
+saveRDS(sos, "sos_2026.rds")
+```
+
