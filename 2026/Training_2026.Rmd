@@ -179,7 +179,6 @@ Let's also train the model with SOS to compare
 LogisticmodelSOS <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
                       + lower_team_rebdiff 
                      + lower_team_3diff 
-                     + lower_team_ftdiff
                      + lower_team_sosdiff
                        , family = binomial, data = gamedata)
 summary(LogisticmodelSOS)
