@@ -19,7 +19,7 @@ library(rpart) #For classification and regression trees
 library(rattle) #For creating nice visualizations of trees
 library(MLmetrics)
 
-Logisticmodel <- readRDS("march_madness_model.rds")
+LogisticmodelnoSOS <- readRDS("march_madness_model.rds")
 LogisticmodelSOS <- readRDS("march_madness_model_sos.rds")
 gamedata <- readRDS("gamedata_2026.rds")
 careerElos <- readRDS("career_elos_2026.rds")
@@ -47,7 +47,7 @@ These look pretty good, Kansas has a much higher max ELO than ARMY.
 
 Next work with an example prediction of the very last row from gamedata.  Do it first without SOS.
 ```{r}
-predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1306, 
+predict(LogisticmodelnoSOS, newdata = data.frame(lower_team_elo = 1306, 
                                             higher_team_elo = 1618, 
                                             lower_team_rebdiff = 17,
                                             lower_team_3diff = 4,
@@ -60,7 +60,6 @@ predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1306,
                                             higher_team_elo = 1618, 
                                             lower_team_rebdiff = 17,
                                             lower_team_3diff = 4,
-                                            lower_team_ftdiff = -5,
                                             lower_team_sosdiff = 37), type = "response")
 ```
 
@@ -69,9 +68,9 @@ This is the probability the lower team wins so we'll have to check the team ID a
 
 Now we want to read in and build all of the predictions of every team vs every other team in the tourney.  This will allow us to predict future round matchups. First we need to get the final elos into a place we can use them
 ```{r}
-gamedata2025 <- gamedata %>% filter(Season == 2026)
+gamedata2025 <- gamedata #%>% filter(Season == 2026)
 
-eloScores2025 <- elo.run(score(gamedata2025$WScore, gamedata2025$LScore) ~ gamedata2025$WTeamName + gamedata2025$LTeamName, data = gamedata2025, k = 28)
+eloScores2025 <- elo.run(score(gamedata2025$WScore, gamedata2025$LScore) ~ gamedata2025$WTeamName + gamedata2025$LTeamName + regress(gamedata2025$Season,1500,0.6), data = gamedata2025, k = 20)
 
 finalElos <- as.data.frame(final.elos(eloScores2025))
 finalElos <- rownames_to_column(finalElos, "TeamName")
@@ -109,24 +108,23 @@ Now we should test Saint Mary's against Duke and Miami OH against Virgina just t
 First, Miami of Ohio against Virginia
 
 ```{r}
-predict(Logisticmodel, newdata = data.frame(lower_team_elo = 1727, 
-                                            higher_team_elo = 1716, 
+predict(LogisticmodelnoSOS, newdata = data.frame(lower_team_elo = 1692, 
+                                            higher_team_elo = 1675, 
                                             lower_team_rebdiff = -5,
                                             lower_team_3diff = -1,
                                             lower_team_ftdiff = -1), type = "response")
 ```
 
-A 54pct probability of beating Virginia.  Now if we add in SOS let's see how they do
+A 58pct probability of beating Virginia.  Now if we add in SOS let's see how they do
 ```{r}
-predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1727, 
-                                            higher_team_elo = 1716, 
+predict(LogisticmodelSOS, newdata = data.frame(lower_team_elo = 1692, 
+                                            higher_team_elo = 1675, 
                                             lower_team_rebdiff = -5,
                                             lower_team_3diff = -1,
-                                            lower_team_ftdiff = -1,
                                             lower_team_sosdiff = -96), type = "response")
 ```
 
-A 51pct chance with current stats.  So this moves the percent chance by about 3pct when the strength of schedule is significant which is good.  
+A 54pct chance with current stats.  So this moves the percent chance by about 3-4pct when the strength of schedule is significant which is good.  
 
 It's worth noting that I initially did this test, and the percentage didn't shift.  I caught a bug where I serialized the model without SOS twice at the end of the training file.  This separate distinct test and distinct file really helped me see what was wrong.  Always worth splitting up the work.  
 
@@ -176,7 +174,6 @@ for(i in 1:nrow(params)) {
   val_sos_model <- glm(lower_team_wins_num ~ lower_team_elo + higher_team_elo
                     + lower_team_rebdiff 
                     + lower_team_3diff 
-                    + lower_team_ftdiff
                     + lower_team_sosdiff
                     , family = binomial, data = train_data_loop)
   
